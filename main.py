@@ -4,20 +4,18 @@ import requests
 from bs4 import BeautifulSoup
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread
-from urllib.parse import urlparse
-from concurrent.futures import ThreadPoolExecutor
 import time
 
-# --- Set up Google Sheets connection ---
-def load_sheet(creds_file, sheet_url, tab_name):
+# --- Load Google Sheet ---
+def load_sheet(creds_dict, sheet_url, tab_name):
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(creds_file, scope)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     sheet = client.open_by_url(sheet_url).worksheet(tab_name)
     data = sheet.get_all_records()
     return pd.DataFrame(data), sheet
 
-# --- Utility functions for web inspection ---
+# --- Analyze a Single URL ---
 def analyze_url(row, index):
     result = {
         f"Link and anchor status {index}": "",
@@ -53,7 +51,7 @@ def analyze_url(row, index):
         robots = soup.find("meta", attrs={"name": "robots"})
         result["ROBOTS"] = robots["content"] if robots else "not found"
 
-        # Check anchor and href
+        # Anchor Check
         found = False
         for a in soup.find_all("a", href=True):
             if target in a["href"]:
@@ -81,7 +79,7 @@ def analyze_url(row, index):
 
     return result
 
-# --- Batch processing ---
+# --- Analyze All Rows ---
 def process_rows(df, row_limit):
     results = []
     for idx, row in df.iterrows():
@@ -94,41 +92,38 @@ def process_rows(df, row_limit):
         results.append(base_result)
     return results
 
-# --- Streamlit UI ---
+# --- Streamlit App ---
 def main():
     st.title("📡 Reportage Monitoring Tool")
 
-    creds_file = st.file_uploader("Upload your Google Sheets API credentials (.json)", type=["json"])
     sheet_url = st.text_input("Paste your private Google Sheet URL:")
     tab_name = st.text_input("Sheet tab name (e.g., 'Sheet1'):")
-    row_limit = st.number_input("How many rows to check (based on sheet)?", min_value=1, value=10)
+    row_limit = st.number_input("How many rows to check?", min_value=1, value=10)
 
-    if st.button("▶ Run Monitoring") and creds_file and sheet_url and tab_name:
-        with st.spinner("Loading sheet..."):
+    if st.button("▶ Run Monitoring") and sheet_url and tab_name:
+        with st.spinner("Loading Google Sheet..."):
             try:
-                with open("temp_creds.json", "wb") as f:
-                    f.write(creds_file.read())
-                df, sheet = load_sheet("temp_creds.json", sheet_url, tab_name)
-                st.success("Sheet loaded. Starting checks...")
+                creds_dict = st.secrets["gcp_service_account"]
+                df, sheet = load_sheet(creds_dict, sheet_url, tab_name)
+                st.success("Sheet loaded. Starting inspection...")
             except Exception as e:
-                st.error(f"Error loading sheet: {e}")
+                st.error(f"❌ Error loading sheet: {e}")
                 return
 
-        # Clean and prepare DataFrame
         df = df.fillna("")
         start = time.time()
         results = process_rows(df, row_limit)
         elapsed = time.time() - start
         st.info(f"✅ Done! Checked {row_limit} rows in {elapsed:.2f} seconds.")
 
-        # Append results to the dataframe
+        # Append results to DataFrame
         for i, r in enumerate(results):
             for k, v in r.items():
                 df.at[i, k] = v
 
         st.dataframe(df.head(row_limit))
 
-        # Export as CSV
+        # Offer CSV download
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button("⬇ Download results as CSV", data=csv, file_name="reportage_monitoring_results.csv")
 
