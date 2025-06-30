@@ -6,6 +6,11 @@ from oauth2client.service_account import ServiceAccountCredentials
 import gspread
 import time
 
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+}
+
 # --- Load Google Sheet ---
 def load_sheet(creds_dict, sheet_url, tab_name):
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -29,7 +34,7 @@ def analyze_url(row, index):
         return result
 
     try:
-        resp = requests.get(page_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        resp = requests.get(page_url, timeout=10, headers=headers)
         result["STATUS CODE"] = resp.status_code
 
         if resp.status_code != 200:
