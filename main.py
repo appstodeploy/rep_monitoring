@@ -34,7 +34,7 @@ def analyze_url(row, index):
         return result
 
     try:
-        resp = requests.get(page_url, timeout=10, headers=headers)
+        resp = requests.get(page_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
         result["STATUS CODE"] = resp.status_code
 
         if resp.status_code != 200:
