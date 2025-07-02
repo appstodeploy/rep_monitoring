@@ -23,7 +23,7 @@ def load_sheet(creds_dict, sheet_url, tab_name):
     return pd.DataFrame(data), sheet
 
 # --- Analyze a Single URL ---
-def analyze_url(row, index, root_domain):
+def analyze_url(row, index, root_domain, timeout):
     result = {
         f"Link and anchor status {index}": "",
         f"REL {index}": "",
@@ -36,7 +36,7 @@ def analyze_url(row, index, root_domain):
         return result
 
     try:
-        resp = requests.get(page_url, timeout=25, headers=headers)
+        resp = requests.get(page_url, timeout=timeout, headers=headers)
         result["STATUS CODE"] = resp.status_code
 
         if resp.status_code != 200:
@@ -105,14 +105,14 @@ def analyze_url(row, index, root_domain):
     return result
 
 # --- Analyze All Rows ---
-def process_rows(df, row_limit, root_domain):
+def process_rows(df, row_limit, root_domain, timeout):
     results = []
     for idx, row in df.iterrows():
         if idx >= row_limit:
             break
         base_result = {}
         for i in range(1, 4):
-            res = analyze_url(row, i, root_domain)
+            res = analyze_url(row, i, root_domain,timeout)
             base_result.update(res)
         results.append(base_result)
     return results
@@ -124,7 +124,8 @@ def main():
     sheet_url = st.text_input("Paste your private Google Sheet URL:")
     tab_name = st.text_input("Sheet tab name (e.g., 'Sheet1'):")
     row_limit = st.number_input("How many rows to check?", min_value=1, value=10)
-    root_domain = st.text_input("Enter root domain to filter anchors (e.g., tabdeal.org):")
+    root_domain = st.text_input("Enter root domain to filter anchors (e.g., example.com):")
+    timeout = st.number_input("Set request timeout (seconds)", min_value=1, max_value=60, value=25)
 
     if st.button("▶ Run Monitoring") and sheet_url and tab_name and root_domain:
         with st.spinner("Loading Google Sheet..."):
@@ -138,7 +139,7 @@ def main():
 
         df = df.fillna("")
         start = time.time()
-        results = process_rows(df, row_limit, root_domain)
+        results = process_rows(df, row_limit, root_domain, timeout)
         elapsed = time.time() - start
         st.info(f"✅ Done! Checked {row_limit} rows in {elapsed:.2f} seconds.")
 
