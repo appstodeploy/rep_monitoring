@@ -5,10 +5,12 @@ from bs4 import BeautifulSoup
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread
 import time
+from urllib.parse import urljoin
+import tldextract
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+                  "(KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 }
 
 # --- Load Google Sheet ---
@@ -21,7 +23,7 @@ def load_sheet(creds_dict, sheet_url, tab_name):
     return pd.DataFrame(data), sheet
 
 # --- Analyze a Single URL ---
-def analyze_url(row, index):
+def analyze_url(row, index, root_domain):
     result = {
         f"Link and anchor status {index}": "",
         f"REL {index}": "",
@@ -34,7 +36,7 @@ def analyze_url(row, index):
         return result
 
     try:
-        resp = requests.get(page_url, timeout=25, headers={"User-Agent": "Mozilla/5.0"})
+        resp = requests.get(page_url, timeout=25, headers=headers)
         result["STATUS CODE"] = resp.status_code
 
         if resp.status_code != 200:
@@ -56,27 +58,45 @@ def analyze_url(row, index):
         robots = soup.find("meta", attrs={"name": "robots"})
         result["ROBOTS"] = robots["content"] if robots else "not found"
 
-        # Anchor Check
+        # Link Check
         found = False
-        for a in soup.find_all("a", href=True):
-            if target in a["href"]:
-                actual_anchor = a.get_text().strip()
-                rel = a.get("rel")
-                rel_val = " ".join(rel) if rel else "none"
-                result[f"REL {index}"] = rel_val
+        root_extracted = tldextract.extract(root_domain).registered_domain
+        filtered_links = []
+        filtered_anchors = []
+        filtered_rels = []
 
-                if anchor:
-                    if actual_anchor == anchor:
-                        result[f"Link and anchor status {index}"] = "true"
+        for a in soup.find_all("a", href=True):
+            full_link = urljoin(page_url, a["href"])
+            link_domain = tldextract.extract(full_link).registered_domain
+
+            if link_domain == root_extracted:
+                filtered_links.append(full_link)
+                filtered_anchors.append(a.get_text(strip=True))
+                rel = a.get("rel")
+                filtered_rels.append(" ".join(rel) if rel else "none")
+
+                # Check for target match
+                if target in full_link and not found:
+                    actual_anchor = a.get_text(strip=True)
+                    rel_val = " ".join(rel) if rel else "none"
+                    result[f"REL {index}"] = rel_val
+
+                    if anchor:
+                        if actual_anchor == anchor:
+                            result[f"Link and anchor status {index}"] = "true"
+                        else:
+                            result[f"Link and anchor status {index}"] = f"anchor mismatch (found: {actual_anchor})"
                     else:
-                        result[f"Link and anchor status {index}"] = f"anchor mismatch (found: {actual_anchor})"
-                else:
-                    result[f"Link and anchor status {index}"] = "link found, no anchor provided"
-                found = True
-                break
+                        result[f"Link and anchor status {index}"] = "link found, no anchor provided"
+                    found = True
 
         if not found:
             result[f"Link and anchor status {index}"] = "link not found"
+
+        # Save all filtered links and anchors
+        result["Links to root domain"] = ", ".join(filtered_links[:30])
+        result["Anchors to root domain"] = ", ".join(filtered_anchors[:30])
+        result["Rel attributes to root domain"] = ", ".join(filtered_rels[:30])
 
     except requests.exceptions.RequestException as e:
         result[f"Link and anchor status {index}"] = f"Request error: {e}"
@@ -85,14 +105,14 @@ def analyze_url(row, index):
     return result
 
 # --- Analyze All Rows ---
-def process_rows(df, row_limit):
+def process_rows(df, row_limit, root_domain):
     results = []
     for idx, row in df.iterrows():
         if idx >= row_limit:
             break
         base_result = {}
         for i in range(1, 4):
-            res = analyze_url(row, i)
+            res = analyze_url(row, i, root_domain)
             base_result.update(res)
         results.append(base_result)
     return results
@@ -104,8 +124,9 @@ def main():
     sheet_url = st.text_input("Paste your private Google Sheet URL:")
     tab_name = st.text_input("Sheet tab name (e.g., 'Sheet1'):")
     row_limit = st.number_input("How many rows to check?", min_value=1, value=10)
+    root_domain = st.text_input("Enter root domain to filter anchors (e.g., tabdeal.org):")
 
-    if st.button("▶ Run Monitoring") and sheet_url and tab_name:
+    if st.button("▶ Run Monitoring") and sheet_url and tab_name and root_domain:
         with st.spinner("Loading Google Sheet..."):
             try:
                 creds_dict = st.secrets["gcp_service_account"]
@@ -117,18 +138,16 @@ def main():
 
         df = df.fillna("")
         start = time.time()
-        results = process_rows(df, row_limit)
+        results = process_rows(df, row_limit, root_domain)
         elapsed = time.time() - start
         st.info(f"✅ Done! Checked {row_limit} rows in {elapsed:.2f} seconds.")
 
-        # Append results to DataFrame
         for i, r in enumerate(results):
             for k, v in r.items():
                 df.at[i, k] = v
 
         st.dataframe(df.head(row_limit))
 
-        # Offer CSV download
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button("⬇ Download results as CSV", data=csv, file_name="reportage_monitoring_results.csv")
 
