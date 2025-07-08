@@ -10,7 +10,7 @@ import tldextract
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+                  "(KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 }
 
 # --- Load Google Sheet ---
@@ -42,21 +42,42 @@ def analyze_url(row, index, root_domain, timeout):
         if resp.status_code != 200:
             return result
 
-        soup = BeautifulSoup(resp.text, "lxml")
-        title = soup.title.string.strip() if soup.title else ""
+        # BeautifulSoup parsing with fallback
+        try:
+            soup = BeautifulSoup(resp.text, "lxml")
+        except Exception as e:
+            print(f"[{index}] lxml parsing failed: {e}. Falling back to html.parser.")
+            try:
+                soup = BeautifulSoup(resp.text, "html.parser")
+            except Exception as e2:
+                print(f"[{index}] html.parser also failed: {e2}. Skipping URL.")
+                result[f"Link and anchor status {index}"] = "HTML parsing error"
+                return result
+
+        # PAGE TITLE
+        try:
+            title = soup.title.string.strip() if soup.title and soup.title.string else ""
+        except Exception:
+            title = ""
         result["PAGE TITLE"] = title
 
         # Canonical
-        canonical_tag = soup.find("link", rel="canonical")
-        if canonical_tag and canonical_tag.get("href"):
-            canonical = canonical_tag["href"].strip()
-            result["CANONICAL"] = "self canonical" if canonical == page_url else canonical
-        else:
-            result["CANONICAL"] = "not found"
+        try:
+            canonical_tag = soup.find("link", rel="canonical")
+            if canonical_tag and canonical_tag.get("href"):
+                canonical = canonical_tag["href"].strip()
+                result["CANONICAL"] = "self canonical" if canonical == page_url else canonical
+            else:
+                result["CANONICAL"] = "not found"
+        except Exception:
+            result["CANONICAL"] = "error"
 
         # Robots
-        robots = soup.find("meta", attrs={"name": "robots"})
-        result["ROBOTS"] = robots["content"] if robots else "not found"
+        try:
+            robots = soup.find("meta", attrs={"name": "robots"})
+            result["ROBOTS"] = robots["content"] if robots else "not found"
+        except Exception:
+            result["ROBOTS"] = "error"
 
         # Link Check
         found = False
@@ -66,34 +87,36 @@ def analyze_url(row, index, root_domain, timeout):
         filtered_rels = []
 
         for a in soup.find_all("a", href=True):
-            full_link = urljoin(page_url, a["href"])
-            link_domain = tldextract.extract(full_link).registered_domain
+            try:
+                full_link = urljoin(page_url, a["href"])
+                link_domain = tldextract.extract(full_link).registered_domain
 
-            if link_domain == root_extracted:
-                filtered_links.append(full_link)
-                filtered_anchors.append(a.get_text(strip=True))
-                rel = a.get("rel")
-                filtered_rels.append(" ".join(rel) if rel else "none")
+                if link_domain == root_extracted:
+                    filtered_links.append(full_link)
+                    filtered_anchors.append(a.get_text(strip=True))
+                    rel = a.get("rel")
+                    filtered_rels.append(" ".join(rel) if rel else "none")
 
-                # Check for target match
-                if target in full_link and not found:
-                    actual_anchor = a.get_text(strip=True)
-                    rel_val = " ".join(rel) if rel else "none"
-                    result[f"REL {index}"] = rel_val
+                    # Check for target match
+                    if target in full_link and not found:
+                        actual_anchor = a.get_text(strip=True)
+                        rel_val = " ".join(rel) if rel else "none"
+                        result[f"REL {index}"] = rel_val
 
-                    if anchor:
-                        if actual_anchor == anchor:
-                            result[f"Link and anchor status {index}"] = "true"
+                        if anchor:
+                            if actual_anchor == anchor:
+                                result[f"Link and anchor status {index}"] = "true"
+                            else:
+                                result[f"Link and anchor status {index}"] = f"anchor mismatch (found: {actual_anchor})"
                         else:
-                            result[f"Link and anchor status {index}"] = f"anchor mismatch (found: {actual_anchor})"
-                    else:
-                        result[f"Link and anchor status {index}"] = "link found, no anchor provided"
-                    found = True
+                            result[f"Link and anchor status {index}"] = "link found, no anchor provided"
+                        found = True
+            except Exception:
+                continue  # skip broken <a> tags
 
         if not found:
             result[f"Link and anchor status {index}"] = "link not found"
 
-        # Save all filtered links and anchors
         result["Links to root domain"] = ", ".join(filtered_links[:30])
         result["Anchors to root domain"] = ", ".join(filtered_anchors[:30])
         result["Rel attributes to root domain"] = ", ".join(filtered_rels[:30])
@@ -112,7 +135,7 @@ def process_rows(df, row_limit, root_domain, timeout):
             break
         base_result = {}
         for i in range(1, 4):
-            res = analyze_url(row, i, root_domain,timeout)
+            res = analyze_url(row, i, root_domain, timeout)
             base_result.update(res)
         results.append(base_result)
     return results
